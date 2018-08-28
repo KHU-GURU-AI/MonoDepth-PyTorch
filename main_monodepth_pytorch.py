@@ -17,20 +17,25 @@ import models_resnet
 
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+
 mpl.rcParams['figure.figsize'] = (15, 10)
 
 
 def return_arguments():
     parser = argparse.ArgumentParser(description='PyTorch Monodepth')
 
-    parser.add_argument('data_dir',
+    parser.add_argument('--data_dir',
+                        default='/home/mlvcgpu/data/kitti/data_original/2011_09_26/',
                         help='path to the dataset folder. \
                         It should contain subfolders with following structure:\
                         "image_02/data" for left images and \
                         "image_03/data" for right images'
                         )
-    parser.add_argument('model_path', help='path to the trained model')
-    parser.add_argument('output_directory',
+    parser.add_argument('--model_path',
+                        default='model',
+                        help='path to the trained model')
+    parser.add_argument('--output_directory',
+                        default='output',
                         help='where save dispairities\
                         for tested images'
                         )
@@ -40,7 +45,7 @@ def return_arguments():
                         default=512)
     parser.add_argument('--model', default='resnet50_md',
                         help='encoder architecture: ' +
-                        'resnet18 or resnet50' + '(default: resnet50)'
+                             'resnet18 or resnet50' + '(default: resnet50)'
                         )
     parser.add_argument('--mode', default='train',
                         help='mode: train or test (default: train)')
@@ -48,7 +53,7 @@ def return_arguments():
                         help='number of total epochs to run')
     parser.add_argument('--learning_rate', default=1e-4,
                         help='initial learning rate (default: 1e-4)')
-    parser.add_argument('--batch_size', default=256,
+    parser.add_argument('--batch_size', default=16,
                         help='mini-batch size (default: 256)')
     parser.add_argument('--adjust_lr', default=True,
                         help='apply learning rate decay or not\
@@ -68,10 +73,10 @@ def return_arguments():
         2.0,
         0.8,
         1.2,
-        ],
-            help='lowest and highest values for gamma,\
+    ],
+                        help='lowest and highest values for gamma,\
                         brightness and color respectively'
-            )
+                        )
     parser.add_argument('--print_images', default=False,
                         help='print disparity and image\
                         generated from disparity on every iteration'
@@ -86,7 +91,7 @@ def adjust_learning_rate(optimizer, epoch, learning_rate):
     """Sets the learning rate to the initial LR\
         decayed by 10 every 30 epochs"""
 
-    if epoch >= 30 and epoch < 40:
+    if 30 <= epoch < 40:
         lr = learning_rate / 2
     elif epoch >= 40:
         lr = learning_rate / 4
@@ -114,29 +119,33 @@ class Model:
         if args.mode == 'train':
             # Load data
             data_dirs = os.listdir(args.data_dir)
+            for dir in data_dirs:
+                if not os.path.isdir(os.path.join(args.data_dir, dir)):
+                    data_dirs.remove(dir)
+
             data_transform = image_transforms(
-                    mode=args.mode,
-                    tensor_type=args.tensor_type,
-                    augment_parameters=args.augment_parameters,
-                    do_augmentation=args.do_augmentation)
+                mode=args.mode,
+                tensor_type=args.tensor_type,
+                augment_parameters=args.augment_parameters,
+                do_augmentation=args.do_augmentation)
             train_datasets = [KittiLoader(os.path.join(args.data_dir,
-                              data_dir), True,
-                              transform=data_transform) for data_dir in
+                                                       data_dir), True,
+                                          transform=data_transform) for data_dir in
                               data_dirs]
             train_dataset = ConcatDataset(train_datasets)
             self.n_img = len(train_dataset)
             print('Use a dataset with', self.n_img, 'images')
             self.train_loader = DataLoader(train_dataset,
-                                           batch_size=args.batch_size,  
+                                           batch_size=args.batch_size,
                                            shuffle=True)
             # Set up model
             self.device = torch.device((
                 'cuda:0' if torch.cuda.is_available() and
-                args.tensor_type == 'torch.cuda.FloatTensor' else 'cpu'))
+                            args.tensor_type == 'torch.cuda.FloatTensor' else 'cpu'))
             self.loss_function = MonodepthLoss(
-                    n=4,
-                    SSIM_w=0.85,
-                    disp_gradient_w=0.1, lr_w=1).to(self.device)
+                n=4,
+                SSIM_w=0.85,
+                disp_gradient_w=0.1, lr_w=1).to(self.device)
             if args.model == 'resnet50_md':
                 self.model = models_resnet.resnet50_md(3)
             elif args.model == 'resnet18_md':
@@ -161,7 +170,7 @@ class Model:
             # Set up model
             self.device = torch.device((
                 'cuda:0' if torch.cuda.is_available() and
-                args.tensor_type == 'torch.cuda.FloatTensor' else 'cpu'))
+                            args.tensor_type == 'torch.cuda.FloatTensor' else 'cpu'))
             if args.model == 'resnet50_md':
                 self.model = models_resnet.resnet50_md(3)
             elif args.model == 'resnet18_md':
@@ -179,7 +188,7 @@ class Model:
                                      self.args.learning_rate)
             running_loss = 0.0
             c_time = time.time()
-            for data in self.train_loader:
+            for batch, data in enumerate(self.train_loader):
                 # Load data
                 left = data['left_image']
                 right = data['right_image']
@@ -213,8 +222,8 @@ class Model:
                     plt.show()
                     print('left_est[0]')
                     plt.imshow(np.transpose(self.loss_function.left_est[0][0,
-                               :, :, :].cpu().detach().numpy(), (1, 2,
-                               0)))
+                                            :, :, :].cpu().detach().numpy(), (1, 2,
+                                                                              0)))
                     plt.show()
                     print('disp_right_est[0]')
                     plt.imshow(np.squeeze(
@@ -224,14 +233,14 @@ class Model:
                     plt.show()
                     print('right_est[0]')
                     plt.imshow(np.transpose(self.loss_function.right_est[0][0,
-                               :, :, :].cpu().detach().numpy(), (1, 2,
-                               0)))
+                                            :, :, :].cpu().detach().numpy(), (1, 2,
+                                                                              0)))
                     plt.show()
-
+                print("[{:04}/{:04}] loss:{:.4}".format(batch, len(self.train_loader), loss))
             # Estimate loss per image
             running_loss += loss.item()
             running_loss /= self.n_img / self.args.batch_size
-            print (
+            print(
                 'Epoch:',
                 epoch + 1,
                 'loss:',
@@ -239,14 +248,14 @@ class Model:
                 'time:',
                 round(time.time() - c_time, 3),
                 's',
-                )
+            )
             if running_loss < best_loss:
                 self.save(self.args.model_path[:-4] + '_cpt.pth')
                 best_loss = running_loss
                 print('Model_saved')
             running_loss = 0.0
 
-        print ('Finished Training. Best loss:', best_loss)
+        print('Finished Training. Best loss:', best_loss)
         self.save(self.args.model_path)
 
     def save(self, path):
@@ -258,10 +267,10 @@ class Model:
     def test(self):
         self.model.eval()
         disparities = np.zeros((self.num_test_examples,
-                               self.input_height, self.input_width),
+                                self.input_height, self.input_width),
                                dtype=np.float32)
         disparities_pp = np.zeros((self.num_test_examples,
-                                  self.input_height, self.input_width),
+                                   self.input_height, self.input_width),
                                   dtype=np.float32)
         with torch.no_grad():
             for (i, data) in enumerate(self.test_loader):
@@ -282,7 +291,7 @@ class Model:
         print('Finished Testing')
 
 
-def main(args):
+def main():
     args = return_arguments()
     if args.mode == 'train':
         model = Model(args)
@@ -294,4 +303,3 @@ def main(args):
 
 if __name__ == '__main__':
     main()
-
