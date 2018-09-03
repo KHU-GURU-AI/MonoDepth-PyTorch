@@ -2,10 +2,11 @@ import argparse
 import os
 import time
 import torch
+import torch.optim as optim
 from torch.utils.data import DataLoader, ConcatDataset
 import torchvision.transforms as transforms
 import numpy as np
-import torch.optim as optim
+from skimage.transform import resize
 
 # custom modules
 
@@ -29,31 +30,28 @@ def return_arguments():
                         help='path to the dataset folder. \
                         It should contain subfolders with following structure:\
                         "image_02/data" for left images and \
-                        "image_03/data" for right images'
-                        )
+                        "image_03/data" for right images')
     parser.add_argument('--model_path',
                         default='model',
                         help='path to the trained model')
     parser.add_argument('--output_directory',
                         default='output',
                         help='where save dispairities\
-                        for tested images'
-                        )
+                        for tested images')
     parser.add_argument('--input_height', type=int, help='input height',
                         default=256)
     parser.add_argument('--input_width', type=int, help='input width',
                         default=512)
     parser.add_argument('--model', default='resnet50_md',
                         help='encoder architecture: ' +
-                             'resnet18 or resnet50' + '(default: resnet50)'
-                        )
+                             'resnet18 or resnet50' + '(default: resnet50)')
     parser.add_argument('--mode', default='train',
                         help='mode: train or test (default: train)')
-    parser.add_argument('--epochs', default=50,
+    parser.add_argument('--epochs', default=50, type=int,
                         help='number of total epochs to run')
     parser.add_argument('--learning_rate', default=1e-4,
                         help='initial learning rate (default: 1e-4)')
-    parser.add_argument('--batch_size', default=16,
+    parser.add_argument('--batch_size', default=60,
                         help='mini-batch size (default: 256)')
     parser.add_argument('--adjust_lr', default=True,
                         help='apply learning rate decay or not\
@@ -83,7 +81,9 @@ def return_arguments():
                         )
     parser.add_argument('--print_weights', default=False,
                         help='print weights of every layer')
+    parser.add_argument('--gpuids', default=[0], nargs='+', help='GPU ID for using')
     args = parser.parse_args()
+    args.gpuids = list(map(int, args.gpuids))
     return args
 
 
@@ -117,40 +117,46 @@ class Model:
     def __init__(self, args):
         self.args = args
         if args.mode == 'train':
-            # Load data
+            # Data Pre-processing
+            # Set data dir
             data_dirs = os.listdir(args.data_dir)
             for dir in data_dirs:
                 if not os.path.isdir(os.path.join(args.data_dir, dir)):
                     data_dirs.remove(dir)
 
+            # Define data transform
             data_transform = image_transforms(
                 mode=args.mode,
                 tensor_type=args.tensor_type,
                 augment_parameters=args.augment_parameters,
                 do_augmentation=args.do_augmentation)
+            # Load data
             train_datasets = [KittiLoader(os.path.join(args.data_dir,
                                                        data_dir), True,
                                           transform=data_transform) for data_dir in
                               data_dirs]
             train_dataset = ConcatDataset(train_datasets)
+
             self.n_img = len(train_dataset)
             print('Use a dataset with', self.n_img, 'images')
             self.train_loader = DataLoader(train_dataset,
                                            batch_size=args.batch_size,
                                            shuffle=True)
             # Set up model
-            self.device = torch.device((
-                'cuda:0' if torch.cuda.is_available() and
-                            args.tensor_type == 'torch.cuda.FloatTensor' else 'cpu'))
+            self.cuda = True if torch.cuda.is_available() and args.tensor_type == 'torch.cuda.FloatTensor' else False
             self.loss_function = MonodepthLoss(
                 n=4,
                 SSIM_w=0.85,
-                disp_gradient_w=0.1, lr_w=1).to(self.device)
+                disp_gradient_w=0.1, lr_w=1)
             if args.model == 'resnet50_md':
                 self.model = models_resnet.resnet50_md(3)
             elif args.model == 'resnet18_md':
                 self.model = models_resnet.resnet18_md(3)
-            self.model = self.model.to(self.device)
+
+            if self.cuda:
+                torch.cuda.set_device(0)
+                self.loss_function = self.loss_function.cuda()
+                self.model = torch.nn.DataParallel(self.model, args.gpuids).cuda()
             self.optimizer = optim.Adam(self.model.parameters(),
                                         lr=args.learning_rate)
             if args.tensor_type == 'torch.cuda.FloatTensor':
@@ -236,7 +242,8 @@ class Model:
                                             :, :, :].cpu().detach().numpy(), (1, 2,
                                                                               0)))
                     plt.show()
-                print("[{:04}/{:04}] loss:{:.4}".format(batch, len(self.train_loader), loss))
+                if batch % 10 == 0:
+                    print("[Epoch {:03}][{:04}/{:04}] loss:{:.05}".format(epoch, batch, len(self.train_loader), loss))
             # Estimate loss per image
             running_loss += loss.item()
             running_loss /= self.n_img / self.args.batch_size
@@ -249,8 +256,8 @@ class Model:
                 round(time.time() - c_time, 3),
                 's',
             )
-            if running_loss < best_loss:
-                self.save(self.args.model_path[:-4] + '_cpt.pth')
+            if epoch % 10 == 0:
+                self.save('{}_ep{}_cpt.pth'.format(self.args.model_path, epoch))
                 best_loss = running_loss
                 print('Model_saved')
             running_loss = 0.0
@@ -288,6 +295,10 @@ class Model:
         np.save(self.output_directory + '/disparities.npy', disparities)
         np.save(self.output_directory + '/disparities_pp.npy',
                 disparities_pp)
+        disp_to_img = resize(disparities[0].squeeze(), [720, 960], mode='constant')
+        # plt.imshow(disp_to_img, cmap='plasma')
+        plt.imsave(os.path.join(self.output_directory,
+                                self.args.model_path.split('/')[-1][:-4] + '_test0.png'), disp_to_img, cmap='plasma')
         print('Finished Testing')
 
 
