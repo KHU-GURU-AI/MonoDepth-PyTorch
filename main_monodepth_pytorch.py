@@ -1,3 +1,4 @@
+# test
 import argparse
 import os
 import time
@@ -47,7 +48,7 @@ def return_arguments():
                              'resnet18 or resnet50' + '(default: resnet50)')
     parser.add_argument('--mode', default='train',
                         help='mode: train or test (default: train)')
-    parser.add_argument('--epochs', default=50, type=int,
+    parser.add_argument('--epochs', default=100, type=int,
                         help='number of total epochs to run')
     parser.add_argument('--learning_rate', default=1e-4,
                         help='initial learning rate (default: 1e-4)')
@@ -82,8 +83,12 @@ def return_arguments():
     parser.add_argument('--print_weights', default=False,
                         help='print weights of every layer')
     parser.add_argument('--gpuids', default=[0], nargs='+', help='GPU ID for using')
+    parser.add_argument('--resume', action='store_true', help='resume recent training')
+    parser.add_argument('--pretrained_model', default='checkpoint.pth.zip')
+    parser.add_argument('--start-epoch', default=0, type=int, metavar='N', help='manual epoch number (useful on restarts)')
     args = parser.parse_args()
     args.gpuids = list(map(int, args.gpuids))
+    print(args)
     return args
 
 
@@ -161,6 +166,20 @@ class Model:
                                         lr=args.learning_rate)
             if args.tensor_type == 'torch.cuda.FloatTensor':
                 torch.cuda.synchronize()
+
+             # optionally resume from a checkpoint
+            if args.resume:
+                if os.path.isfile(args.pretrained_model):
+                    print("=> loading checkpoint '{}'".format(args.pretrained_model))
+                    checkpoint = torch.load(args.pretrained_model)
+                    args.start_epoch = checkpoint['epoch']
+                    self.model.load_state_dict(checkpoint['state_dict'])
+                    self.optimizer.load_state_dict(checkpoint['optimizer'])
+                    print("=> loaded checkpoint '{}' (epoch {})"
+                        .format(args.pretrained_model, checkpoint['epoch']))
+                else:
+                    print("=> no checkpoint found at '{}'".format(args.pretrained_model))
+            
         elif args.mode == 'test':
             # Load data
             self.output_directory = args.output_directory
@@ -188,12 +207,13 @@ class Model:
         losses = []
         best_loss = float('Inf')
         self.model.train()
-        for epoch in range(self.args.epochs):
+        for epoch in range(self.args.start_epoch, self.args.epochs):
             if self.args.adjust_lr:
                 adjust_learning_rate(self.optimizer, epoch,
                                      self.args.learning_rate)
             running_loss = 0.0
             c_time = time.time()
+
             for batch, data in enumerate(self.train_loader):
                 # Load data
                 left = data['left_image']
@@ -244,6 +264,7 @@ class Model:
                     plt.show()
                 if batch % 10 == 0:
                     print("[Epoch {:03}][{:04}/{:04}] loss:{:.05}".format(epoch, batch, len(self.train_loader), loss))
+
             # Estimate loss per image
             running_loss += loss.item()
             running_loss /= self.n_img / self.args.batch_size
@@ -256,14 +277,22 @@ class Model:
                 round(time.time() - c_time, 3),
                 's',
             )
-            if epoch % 10 == 0:
-                self.save('{}_ep{}_cpt.pth'.format(self.args.model_path, epoch))
+            if epoch % 5 == 0:
+                self.save_checkpoint({
+                    'epoch': epoch + 1,
+                    'state_dict': self.model.state_dict(),
+                    'optimizer' : self.optimizer.state_dict(),
+                }, 
+                filename=self.args.pretrained_model)
                 best_loss = running_loss
                 print('Model_saved')
             running_loss = 0.0
 
         print('Finished Training. Best loss:', best_loss)
-        self.save(self.args.model_path)
+
+    def save_checkpoint(self, state, filename):
+        print(filename)
+        torch.save(state, filename)
 
     def save(self, path):
         torch.save(self.model.state_dict(), path)

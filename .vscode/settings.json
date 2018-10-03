@@ -1,0 +1,42 @@
+{
+    "deploy.reloaded": {
+        "packages": [
+            {
+                "name": "MonoDepth",
+                "description": "MonoDepth",
+                "files": [
+                    "*",
+                ],
+                "exclude": [
+                    "/model",
+                    "/output",
+                    "/readme_images",
+                    "*.ipynb",
+                    "*.md",
+                ],
+                "button": true,
+                "deployOnChange": true,
+                "targets": [
+                    "mlvc01-depth",
+                ]
+            },
+        ],
+
+        "targets": [
+            {
+                "type": "sftp",
+                "name": "mlvc01-depth",
+                "description": "mlvc01",
+
+                "dir": "/home/mlvcgpu/kairos/MonoDepth-PyTorch/",
+                "modes":{
+                    "/**/*.py": 777,
+                },
+
+                "host": "mlvc01",
+                "user": "mlvcgpu", "password": "mlvcgpu!",
+                "port": 2222
+            }
+        ],
+    }
+}
